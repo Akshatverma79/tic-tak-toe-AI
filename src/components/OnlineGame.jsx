@@ -13,6 +13,7 @@ const OnlineGame = ({ roomId, backToHome }) => {
   const [friendDisconnected, setFriendDisconnected] = useState(false);
 
   const hasJoined = useRef(false);
+  const gameStartedWithFriend = useRef(false); // New: Track if 2 players ever joined
 
   useEffect(() => {
     const setupGame = async () => {
@@ -39,13 +40,16 @@ const OnlineGame = ({ roomId, backToHome }) => {
           const count = presences.length;
           setPlayersOnline(count);
 
-          // Handle Disconnection Overlay
-          // If we were 2 players and now we are 1, and no one has won yet
-          if (hasJoined.current && count < 2 && !winData?.winner) {
+          // Logic Fix: Only trigger disconnect if 2 players were present at some point
+          if (count >= 2) {
+            gameStartedWithFriend.current = true;
+          }
+
+          if (gameStartedWithFriend.current && count < 2 && !winData?.winner) {
             setFriendDisconnected(true);
           }
 
-          // Assign Symbol (X for first, O for second)
+          // Assign Symbol
           if (!playerSymbol && !hasJoined.current) {
             const role = count === 1 ? 'X' : 'O';
             setPlayerSymbol(role);
@@ -76,11 +80,12 @@ const OnlineGame = ({ roomId, backToHome }) => {
         handleDatabaseCleanup();
       });
     };
-  }, [roomId, playersOnline]);
+  }, [roomId]); // Removed playersOnline from dependency to prevent loops
 
   const handleDatabaseCleanup = async () => {
-    // If you are the last one leaving, delete the record to keep DB clean
-    if (playersOnline <= 1) {
+    // Check actual online count before deleting
+    const { data } = await supabase.from('games').select('id').eq('id', roomId);
+    if (data && playersOnline <= 1) {
       await supabase.from('games').delete().eq('id', roomId);
     }
   };
@@ -88,17 +93,16 @@ const OnlineGame = ({ roomId, backToHome }) => {
   const handleMove = async (i) => {
     if (board[i] || winData?.winner || friendDisconnected) return;
     
-    // TURN ENFORCEMENT
     const myTurn = (playerSymbol === 'X' && isXNext) || (playerSymbol === 'O' && !isXNext);
     
     if (!myTurn) {
-      setGameMessage("SYSTEM: AUTHENTICATION ERROR. WAIT FOR PEER TURN.");
+      setGameMessage("WAIT FOR PEER TURN");
       setTimeout(() => setGameMessage(""), 2000);
       return;
     }
 
     if (playersOnline < 2) {
-      setGameMessage("SYSTEM: WAITING FOR REMOTE PEER...");
+      setGameMessage("WAITING FOR FRIEND...");
       return;
     }
 
@@ -113,64 +117,61 @@ const OnlineGame = ({ roomId, backToHome }) => {
     }).eq('id', roomId);
   };
 
+  const copyInvite = () => {
+    const url = `${window.location.origin}?room=${roomId}`;
+    navigator.clipboard.writeText(url);
+    alert("Link Copied!");
+  };
+
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-4 text-white bg-[#0B0E14] relative">
+    <div className="flex flex-col items-center justify-center min-h-screen p-4 text-white bg-[#0B0E14] relative font-mono">
       
-      {/* DISCONNECTION OVERLAY */}
       <AnimatePresence>
         {friendDisconnected && (
-          <motion.div 
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-6 text-center"
-          >
-            <div className="max-w-xs">
-              <h2 className="text-3xl font-black text-red-500 mb-4 tracking-tighter uppercase">Connection Lost</h2>
-              <p className="text-slate-400 mb-8 text-sm leading-relaxed">The remote peer has disconnected from the neural link. Session terminated.</p>
-              <button 
-                onClick={backToHome}
-                className="w-full bg-red-600 py-4 rounded-2xl font-bold uppercase tracking-widest text-xs shadow-lg shadow-red-900/40"
-              >
-                Return to Base
-              </button>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-xl p-6 text-center">
+            <div className="max-w-xs p-8 border border-red-500/30 bg-slate-900 rounded-[2rem]">
+              <h2 className="text-2xl font-black text-red-500 mb-2">LINK SEVERED</h2>
+              <p className="text-slate-400 mb-8 text-xs leading-relaxed uppercase tracking-widest">Remote peer has exited the session.</p>
+              <button onClick={backToHome} className="w-full bg-red-600 py-4 rounded-xl font-bold uppercase tracking-tighter text-xs">Exit</button>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
       <div className="text-center mb-8">
-        <div className="flex flex-col items-center gap-2 mb-4">
-          <span className="bg-slate-900/50 text-blue-400 px-4 py-1 rounded-full text-[10px] font-bold border border-blue-500/20 tracking-widest">
-            ID: {playerSymbol || 'CONNECTING...'}
+        <div className="flex items-center justify-center gap-2 mb-4">
+          <span className="bg-slate-900 text-blue-400 px-4 py-1 rounded-full text-[10px] font-bold border border-blue-500/20">
+            SESSION: {roomId}
           </span>
-          <div className="flex items-center gap-2">
-            <div className={`h-1.5 w-1.5 rounded-full animate-pulse ${playersOnline < 2 ? 'bg-yellow-500' : 'bg-green-500'}`} />
-            <span className="text-[10px] font-bold text-slate-500 tracking-widest uppercase">
-              {playersOnline < 2 ? 'Searching for Peer' : 'Peer Linked'}
-            </span>
-          </div>
+          <button onClick={copyInvite} className="p-1.5 bg-slate-800 rounded-lg border border-slate-700 hover:bg-slate-700">📋</button>
+        </div>
+        
+        <div className="flex items-center justify-center gap-2 mb-6">
+           <div className={`h-2 w-2 rounded-full ${playersOnline < 2 ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
+           <span className="text-[10px] font-bold tracking-[0.3em] uppercase opacity-60">
+             {playersOnline < 2 ? 'Awaiting Peer' : 'Neural Link Active'}
+           </span>
         </div>
 
-        <h1 className="text-4xl font-black italic tracking-tight mb-2 uppercase">
-          {winData?.winner ? (winData.winner === 'Draw' ? "Stalemate" : `Winner: ${winData.winner}`) : 
-          (isXNext ? "X Processing" : "O Processing")}
+        <h1 className="text-4xl font-black mb-2 uppercase tracking-tighter">
+          {winData?.winner ? (winData.winner === 'Draw' ? "Draw" : `${winData.winner} Wins`) : (isXNext ? "X Turn" : "O Turn")}
         </h1>
-        <p className="text-blue-500 text-[10px] font-bold h-4 tracking-[0.2em]">{gameMessage}</p>
+        <p className="text-blue-500 text-[10px] font-bold h-4 tracking-widest">{gameMessage}</p>
       </div>
 
-      {/* Game Board */}
-      <div className="grid grid-cols-3 gap-3 p-4 bg-slate-900/40 backdrop-blur-xl rounded-[2.5rem] border border-slate-700/50">
+      <div className="grid grid-cols-3 gap-3 p-4 bg-slate-900/40 backdrop-blur-xl rounded-[2.5rem] border border-slate-700/50 shadow-2xl">
         {board.map((sq, i) => (
-          <button key={i} onClick={() => handleMove(i)} className={`h-24 w-24 rounded-2xl flex items-center justify-center text-4xl font-black bg-slate-950 border transition-all ${winData?.line?.includes(i) ? 'border-blue-500 bg-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'border-slate-800 hover:border-slate-600'}`}>
+          <button key={i} onClick={() => handleMove(i)} className={`h-24 w-24 rounded-2xl flex items-center justify-center text-4xl font-black bg-slate-950 border transition-all ${winData?.line?.includes(i) ? 'border-blue-500 bg-blue-500/20' : 'border-slate-800 hover:border-blue-500/30'}`}>
             <AnimatePresence>
-              {sq && <motion.span initial={{ scale: 0, rotate: -45 }} animate={{ scale: 1, rotate: 0 }} className={sq === 'X' ? 'text-blue-400' : 'text-purple-400'}>{sq}</motion.span>}
+              {sq && <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} className={sq === 'X' ? 'text-blue-400' : 'text-purple-400'}>{sq}</motion.span>}
             </AnimatePresence>
           </button>
         ))}
       </div>
 
-      <button onClick={backToHome} className="mt-12 text-slate-600 hover:text-white transition-all uppercase text-[10px] font-bold tracking-[0.4em]">
-        Abort Session
-      </button>
+      <div className="mt-8 opacity-40 text-[10px] font-bold tracking-widest">
+        YOU ARE: PLAYER {playerSymbol || '...'}
+      </div>
     </div>
   );
 };
